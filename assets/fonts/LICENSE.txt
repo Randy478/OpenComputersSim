@@ -1,1 +1,2 @@
-Ubuntu Mono - Ubuntu Font Licence 1.0
+Ubuntu Mono - Ubuntu Font Licence 1.0 (TTF fallback)
+GNU Unifont - GPLv2+ with font embedding exception / OFL-1.1 (unifont.hex, the OpenComputers screen font)

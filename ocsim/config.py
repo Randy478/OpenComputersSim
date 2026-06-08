@@ -15,6 +15,8 @@ All sizes use the same numbers OpenComputers itself uses (see
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
 
 
@@ -85,9 +87,18 @@ class MachineConfig:
     # Tmpfs (RAM filesystem) capacity in bytes.
     tmpfs_capacity: int = 64 * 1024
 
+    # Whether an internet card is installed (enables wget/pastebin).
+    internet_card: bool = True
+
+    # Optional hard override for total RAM, in KiB. When set (> 0) it takes
+    # precedence over ram_sticks, so you can dial in any capacity you like.
+    ram_total_kb_override: int = 0
+
     @property
     def total_memory(self) -> int:
         """Total installed RAM in bytes."""
+        if self.ram_total_kb_override and self.ram_total_kb_override > 0:
+            return int(self.ram_total_kb_override) * 1024
         return sum(RAM_SIZES_KB[t] for t in self.ram_sticks) * 1024
 
     @property
@@ -111,4 +122,109 @@ class MachineConfig:
                 f"             [{i}] Tier {d.tier}  {d.capacity // 1024} KiB  "
                 f"label={d.label!r}" + ("  (boot)" if i == 0 else "")
             )
+        lines.append(f"  Internet : {'yes' if self.internet_card else 'no'}")
         return "\n".join(lines)
+
+
+@dataclass
+class DisplayConfig:
+    font: str = "unifont"   # "unifont" (authentic) or "ttf"
+    scale: int = 0          # 0 = auto-fit to the desktop
+    font_size: int = 18     # only used when font == "ttf"
+
+
+@dataclass
+class SimConfig:
+    """Everything the simulator reads at startup. Serialised to machine.json."""
+
+    machine: MachineConfig = field(default_factory=MachineConfig)
+    display: DisplayConfig = field(default_factory=DisplayConfig)
+
+    # -- serialisation ------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        m = self.machine
+        return {
+            "_comment": "OpenComputersSim machine config. Edit and restart. "
+                        "RAM tiers: 1, 1.5, 2, 2.5, 3, 3.5 (KiB: 192/256/384/"
+                        "512/768/1024 per stick). Disk tiers: 1, 2, 3 "
+                        "(1/2/4 MiB). Set ram_total_kb_override > 0 to force an "
+                        "exact RAM capacity regardless of ram_sticks.",
+            "cpu_tier": m.cpu_tier,
+            "gpu_tier": m.gpu_tier,
+            "screen_tier": m.screen_tier,
+            "ram_sticks": list(m.ram_sticks),
+            "ram_total_kb_override": m.ram_total_kb_override,
+            "disks": [{"tier": d.tier, "label": d.label, "readonly": d.readonly}
+                      for d in m.disks],
+            "tmpfs_capacity_kb": m.tmpfs_capacity // 1024,
+            "internet_card": m.internet_card,
+            "display": {
+                "font": self.display.font,
+                "scale": self.display.scale,
+                "font_size": self.display.font_size,
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SimConfig":
+        m = MachineConfig()
+        m.cpu_tier = str(d.get("cpu_tier", m.cpu_tier))
+        m.gpu_tier = str(d.get("gpu_tier", m.gpu_tier))
+        m.screen_tier = str(d.get("screen_tier", m.screen_tier))
+        if "ram_sticks" in d and d["ram_sticks"]:
+            m.ram_sticks = [str(t) for t in d["ram_sticks"]]
+        m.ram_total_kb_override = int(d.get("ram_total_kb_override", 0) or 0)
+        if "disks" in d and d["disks"]:
+            m.disks = [
+                DiskSpec(tier=str(x.get("tier", "3")),
+                         label=str(x.get("label", f"disk{i}")),
+                         readonly=bool(x.get("readonly", False)))
+                for i, x in enumerate(d["disks"])
+            ]
+        if "tmpfs_capacity_kb" in d:
+            m.tmpfs_capacity = int(d["tmpfs_capacity_kb"]) * 1024
+        m.internet_card = bool(d.get("internet_card", True))
+
+        disp = DisplayConfig()
+        dd = d.get("display", {}) or {}
+        disp.font = str(dd.get("font", disp.font))
+        disp.scale = int(dd.get("scale", disp.scale))
+        disp.font_size = int(dd.get("font_size", disp.font_size))
+
+        cfg = cls(machine=m, display=disp)
+        cfg.validate()
+        return cfg
+
+    def validate(self):
+        m = self.machine
+        for t in m.ram_sticks:
+            if t not in RAM_SIZES_KB:
+                raise ValueError(
+                    f"invalid RAM tier {t!r}; valid: {sorted(RAM_SIZES_KB)}")
+        for d in m.disks:
+            if d.tier not in HDD_SIZES_KB:
+                raise ValueError(
+                    f"invalid disk tier {d.tier!r}; valid: {sorted(HDD_SIZES_KB)}")
+        for name, t in (("screen", m.screen_tier), ("gpu", m.gpu_tier)):
+            if t not in SCREEN_TIERS:
+                raise ValueError(
+                    f"invalid {name} tier {t!r}; valid: {sorted(SCREEN_TIERS)}")
+
+    # -- files --------------------------------------------------------------
+
+    def save(self, path: str):
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2)
+            f.write("\n")
+
+
+def load_or_create(path: str) -> SimConfig:
+    """Load the config from ``path``; create it with defaults if missing."""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return SimConfig.from_dict(json.load(f))
+    cfg = SimConfig()
+    cfg.save(path)
+    return cfg

@@ -21,6 +21,7 @@ from .components.computer_dev import Computer
 from .components.eeprom import EEPROM
 from .components.filesystem import Filesystem
 from .components.gpu import GPU
+from .components.internet import Internet
 from .components.keyboard import Keyboard
 from .components.screen import Screen
 
@@ -109,6 +110,10 @@ class Machine:
         self.tmpfs = add(
             Filesystem(self, root=tmp_root, capacity=cfg.tmpfs_capacity, label="tmpfs")
         )
+
+        # Internet card.
+        if cfg.internet_card:
+            add(Internet(self))
 
         # EEPROM with the boot address baked into its data section.
         self.eeprom = add(EEPROM(self, data=boot_addr or ""))

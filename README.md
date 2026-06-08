@@ -9,7 +9,13 @@ in-game **Tier 3 screen**. You get a genuine OpenOS shell — the same `lua`
 interpreter, the same `bin/` programs, the same `/lib` APIs — not a
 reimplementation.
 
-![Tier 3 boot screen](assets/screenshot.png)
+It renders with **GNU Unifont** — the exact bitmap font OpenComputers uses
+in-game — so the screen is pixel-for-pixel what you'd see in Minecraft.
+
+![Tier 3 screen running OpenOS](screenshots/04_internet.png)
+
+More screenshots (boot, hardware, internet card, Lua REPL) are in
+[`screenshots/`](screenshots/).
 
 ## The simulated machine
 
@@ -22,6 +28,7 @@ The default machine is exactly the one requested:
 | Screen    | Tier 3 |
 | Memory    | 4 × Tier 3.5 RAM (4096 KiB total) |
 | Storage   | 4 × Tier 3 hard drives (4 MiB each) |
+| Internet  | Internet card (HTTP + TCP) |
 | EEPROM    | Lua BIOS |
 
 OpenOS is installed on the first hard drive (the boot disk); the other three
@@ -40,8 +47,8 @@ mod. OpenComputersSim recreates that environment in Python:
   process coroutine to the host — the mechanism that makes OpenOS's cooperative
   multitasking work.
 * **`ocsim/components/`** implements the hardware as OpenComputers components
-  (`gpu`, `screen`, `keyboard`, `filesystem`, `eeprom`, `computer`), exposed to
-  Lua through the standard `component` / `computer` / `unicode` APIs.
+  (`gpu`, `screen`, `keyboard`, `filesystem`, `eeprom`, `internet`, `computer`),
+  exposed to Lua through the standard `component` / `computer` / `unicode` APIs.
 * The EEPROM **Lua BIOS** loads `/init.lua` from the boot disk, which boots
   real OpenOS.
 * **`ocsim/osfiles/`** is the unmodified OpenOS filesystem from the mod
@@ -66,8 +73,13 @@ python run.py                       # open the Tier 3 display window
 python run.py --spec                # print the machine specification
 python run.py --headless "lshw; df" # boot without a GUI and print the screen
 python run.py --fresh               # factory reset the disks first
-python run.py --font-size 22        # bigger text / bigger window
+python run.py --scale 2             # bigger pixels (default auto-fits screen)
+python run.py --font ttf            # use Ubuntu Mono instead of Unifont
 ```
+
+The window auto-sizes to fit your monitor. The authentic Unifont renders at
+8×16 pixels per cell, so `--scale 1` is a true 1280×800 OpenComputers screen
+and `--scale 2`/`3` make it bigger.
 
 You can also run it as a module:
 
@@ -87,9 +99,62 @@ reboot          # restart the machine (disks persist)
 shutdown        # close the machine
 ```
 
-Anything you can do in OpenOS works here, including downloading programs from
-the internet with `wget` / `pastebin` (OpenOS uses the `internet` card; see
-*Limitations*).
+The machine has an **internet card**, so you can pull programs and files
+straight from the web:
+
+```
+wget https://example.com/program.lua
+pastebin get <id> program.lua
+```
+
+(Network access is subject to your machine's firewall/network policy.)
+
+## Configuration
+
+The first time you run it, a config file is created at
+`~/.opencomputerssim/machine.json`. Edit it and restart to change the hardware —
+no code changes needed. Print the current path and contents with:
+
+```bash
+python run.py --print-config
+```
+
+Example: a beefier machine with 16 MiB of RAM and six drives:
+
+```json
+{
+  "cpu_tier": "3",
+  "gpu_tier": "3",
+  "screen_tier": "3",
+  "ram_sticks": ["3.5", "3.5", "3.5", "3.5"],
+  "ram_total_kb_override": 16384,
+  "disks": [
+    { "tier": "3", "label": "OpenOS" },
+    { "tier": "3", "label": "data1" },
+    { "tier": "3", "label": "data2" },
+    { "tier": "3", "label": "data3" },
+    { "tier": "2", "label": "scratch" },
+    { "tier": "1", "label": "floppy", "readonly": true }
+  ],
+  "tmpfs_capacity_kb": 64,
+  "internet_card": true,
+  "display": { "font": "unifont", "scale": 0, "font_size": 18 }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `cpu_tier` / `gpu_tier` / `screen_tier` | `"1"`, `"2"` or `"3"` |
+| `ram_sticks` | list of RAM tiers (`1`, `1.5`, `2`, `2.5`, `3`, `3.5`); KiB per stick: 192/256/384/512/768/1024 |
+| `ram_total_kb_override` | set `> 0` to force an exact RAM size in KiB, ignoring `ram_sticks` |
+| `disks` | list of drives; tier `1`/`2`/`3` = 1/2/4 MiB. The **first disk is the boot disk** (OpenOS). |
+| `tmpfs_capacity_kb` | size of the `/tmp` RAM disk |
+| `internet_card` | `true`/`false` |
+| `display.font` | `"unifont"` (authentic) or `"ttf"` |
+| `display.scale` | pixel scale, `0` = auto-fit |
+
+Use a different config or data directory with `--config PATH` / `--data-dir PATH`.
+CLI flags (`--font`, `--scale`, `--font-size`) override the file for one run.
 
 ## Controls
 
@@ -112,13 +177,14 @@ need `lupa` but not `pygame`.
 
 ## Limitations
 
-* Components that need real-world I/O are not implemented yet: there is no
-  `internet` card (so `wget`/`pastebin` have nothing to talk to), no `modem`
-  networking, and no redstone/robot peripherals. The CPU/GPU/RAM/disk/screen/
-  keyboard/EEPROM set the requested machine needs is complete.
+* Implemented components: CPU, GPU, screen, keyboard, hard drives, EEPROM and
+  the internet card (HTTP + TCP). Not yet implemented: `modem`/network-card
+  multiplayer networking, and redstone/robot/drone peripherals.
 * The host display is true-colour, so the GPU stores exact 24-bit colours
   instead of applying OpenComputers' 8-bit palette deflation. Output therefore
   looks slightly crisper than in-game but behaves identically.
+* Wide (CJK) glyphs render in a single cell rather than occupying two; ASCII
+  and Latin text are pixel-accurate.
 
 ## Credits
 

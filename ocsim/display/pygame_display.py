@@ -11,9 +11,12 @@ import os
 
 from .base import Display
 from .keymap import pygame_keymap
+from .unifont import Unifont
 
-_FONT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "..", "assets", "fonts", "UbuntuMono-Regular.ttf")
+_ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "assets", "fonts")
+_TTF = os.path.join(_ASSETS, "UbuntuMono-Regular.ttf")
+_HEX = os.path.join(_ASSETS, "unifont.hex")
 
 
 def _rgb(value: int):
@@ -21,16 +24,20 @@ def _rgb(value: int):
 
 
 class PygameDisplay(Display):
-    def __init__(self, config, font_size: int = 18, title: str = "OpenComputersSim — Tier 3"):
+    def __init__(self, config, font_size: int = 18, title: str = "OpenComputersSim — Tier 3",
+                 font: str = "unifont", scale: int = 0):
         self.config = config
         self.font_size = font_size
         self.title = title
+        self.font_kind = font  # "unifont" (authentic) or "ttf"
+        self.scale = int(scale)  # 0 = auto-fit to the desktop
         self.screen_addr = None
         self.kb_addr = None
         self._inited = False
         self._last_gen = -1
         self._glyph_cache: dict = {}
         self._mouse_down = False
+        self.unifont = None
 
     def attach(self, screen_addr, kb_addr):
         self.screen_addr = screen_addr
@@ -49,23 +56,43 @@ class PygameDisplay(Display):
         except Exception:
             pass
 
-        font_path = os.path.normpath(_FONT)
-        if os.path.exists(font_path):
-            self.font = pygame.font.Font(font_path, self.font_size)
-        else:  # fall back to any monospace the host has
-            match = pygame.font.match_font(
-                "ubuntumono,dejavusansmono,liberationmono,consolas,couriernew,monospace"
-            )
-            self.font = pygame.font.Font(match, self.font_size)
+        use_unifont = self.font_kind == "unifont" and os.path.exists(_HEX)
+        if use_unifont:
+            scale = self.scale or self._auto_scale(pygame, max_w, max_h, 8, 16)
+            self.unifont = Unifont(pygame, scale=scale)
+            self.cell_w = self.unifont.cell_w
+            self.cell_h = self.unifont.cell_h
+        else:
+            if os.path.exists(_TTF):
+                self.font = pygame.font.Font(_TTF, self.font_size)
+            else:  # fall back to any monospace the host has
+                match = pygame.font.match_font(
+                    "ubuntumono,dejavusansmono,liberationmono,consolas,couriernew,monospace"
+                )
+                self.font = pygame.font.Font(match, self.font_size)
+            self.cell_w = self.font.size("M")[0]
+            self.cell_h = self.font.get_linesize()
 
-        self.cell_w = self.font.size("M")[0]
-        self.cell_h = self.font.get_linesize()
         self.win_w = max_w * self.cell_w
         self.win_h = max_h * self.cell_h
         self.surface = pygame.display.set_mode((self.win_w, self.win_h))
         pygame.display.set_caption(self.title)
         self.keymap = pygame_keymap()
         self._inited = True
+
+    @staticmethod
+    def _auto_scale(pygame, cols, rows, glyph_w, glyph_h):
+        """Pick the largest integer scale whose window fits ~90% of the desktop."""
+        try:
+            info = pygame.display.Info()
+            dw, dh = info.current_w, info.current_h
+        except Exception:
+            dw, dh = 0, 0
+        if dw <= 0 or dh <= 0:
+            return 1
+        max_w = int(dw * 0.9) // (cols * glyph_w)
+        max_h = int(dh * 0.9) // (rows * glyph_h)
+        return max(1, min(4, max_w, max_h))
 
     # ---------------------------------------------------------------- render
 
@@ -91,6 +118,7 @@ class PygameDisplay(Display):
 
         self.surface.fill((0, 0, 0))
         cw, ch = self.cell_w, self.cell_h
+        uf = self.unifont
         if screen.on:
             for y in range(buf.height):
                 row_c = buf.chars[y]
@@ -101,10 +129,15 @@ class PygameDisplay(Display):
                     c = row_c[x]
                     bg = row_bg[x]
                     px = x * cw
-                    if bg != 0x000000:
-                        self.surface.fill(_rgb(bg), (px, py, cw, ch))
-                    if c != " " and c != "":
-                        self.surface.blit(self._glyph(c, row_fg[x], bg), (px, py))
+                    if uf is not None:
+                        if c == "" or (c == " " and bg == 0x000000):
+                            continue
+                        self.surface.blit(uf.surface(ord(c), row_fg[x], bg), (px, py))
+                    else:
+                        if bg != 0x000000:
+                            self.surface.fill(_rgb(bg), (px, py, cw, ch))
+                        if c != " " and c != "":
+                            self.surface.blit(self._glyph(c, row_fg[x], bg), (px, py))
         pg.display.flip()
 
     # ---------------------------------------------------------------- input
