@@ -1,5 +1,7 @@
 # OpenComputersSim
 
+Intstaller: git clone https://github.com/Randy478/OpenComputersSim C:\OpenComputersSim
+
 A desktop simulator for the Minecraft mod
 [**OpenComputers**](https://github.com/MightyPirates/OpenComputers).
 
