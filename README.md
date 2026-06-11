@@ -182,9 +182,12 @@ CLI flags (`--font`, `--scale`, `--font-size`) override the file for one run.
 * Type normally; the shell supports history (↑/↓), tab completion and the usual
   line editing.
 * **Ctrl+C** interrupts the running program (just like in-game).
-* **Ctrl+V** pastes from the system clipboard.
+* **Paste** from the system clipboard with **Ctrl+V** or **Shift+Insert**.
+* **Copy** on-screen text: hold **Shift** and drag the mouse to highlight a
+  block, then press **Ctrl+Shift+C** (or **Ctrl+Insert**) to put it on the
+  system clipboard.
 * Mouse clicks/drag/scroll are delivered as `touch` / `drag` / `scroll`
-  signals.
+  signals. (Shift+drag selects text instead of dragging.)
 * Close the window to power the machine off.
 
 ## Tests

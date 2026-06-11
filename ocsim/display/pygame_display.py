@@ -35,9 +35,15 @@ class PygameDisplay(Display):
         self.kb_addr = None
         self._inited = False
         self._last_gen = -1
+        self._last_sel = None
         self._glyph_cache: dict = {}
         self._mouse_down = False
         self.unifont = None
+        # Text-selection state (for copying to the clipboard). Coordinates are
+        # 0-based cell positions; a selection is the rectangle between them.
+        self._sel_start = None
+        self._sel_end = None
+        self._selecting = False
 
     def attach(self, screen_addr, kb_addr):
         self.screen_addr = screen_addr
@@ -111,9 +117,11 @@ class PygameDisplay(Display):
         self.current_screen = screen
         if not self._inited:
             self._init(buf.max_width, buf.max_height)
-        if buf.generation == self._last_gen:
+        sel_key = (self._sel_start, self._sel_end)
+        if buf.generation == self._last_gen and sel_key == self._last_sel:
             return
         self._last_gen = buf.generation
+        self._last_sel = sel_key
         pg = self.pygame
 
         self.surface.fill((0, 0, 0))
@@ -138,7 +146,28 @@ class PygameDisplay(Display):
                             self.surface.fill(_rgb(bg), (px, py, cw, ch))
                         if c != " " and c != "":
                             self.surface.blit(self._glyph(c, row_fg[x], bg), (px, py))
+        self._draw_selection()
         pg.display.flip()
+
+    def _selection_bounds(self):
+        """Return inclusive 0-based (x0, y0, x1, y1) of the current selection."""
+        if self._sel_start is None or self._sel_end is None:
+            return None
+        sx, sy = self._sel_start
+        ex, ey = self._sel_end
+        return min(sx, ex), min(sy, ey), max(sx, ex), max(sy, ey)
+
+    def _draw_selection(self):
+        bounds = self._selection_bounds()
+        if bounds is None:
+            return
+        pg = self.pygame
+        x0, y0, x1, y1 = bounds
+        cw, ch = self.cell_w, self.cell_h
+        rect = (x0 * cw, y0 * ch, (x1 - x0 + 1) * cw, (y1 - y0 + 1) * ch)
+        overlay = pg.Surface((rect[2], rect[3]), pg.SRCALPHA)
+        overlay.fill((90, 140, 255, 90))
+        self.surface.blit(overlay, (rect[0], rect[1]))
 
     # ---------------------------------------------------------------- input
 
@@ -150,6 +179,11 @@ class PygameDisplay(Display):
         y = max(1, min(buf.height, y))
         return x, y
 
+    def _cell0(self, pos, screen):
+        """Like _cell_at but returns 0-based, clamped cell coordinates."""
+        x, y = self._cell_at(pos, screen)
+        return x - 1, y - 1
+
     def poll_events(self, timeout):
         if not self._inited:
             return []
@@ -160,25 +194,47 @@ class PygameDisplay(Display):
                 self.close()
             elif ev.type == pg.KEYDOWN:
                 code = self.keymap.get(ev.key, 0)
-                # Ctrl+V paste -> clipboard signal
-                if (ev.key == pg.K_v and (ev.mod & pg.KMOD_CTRL)):
+                ctrl = ev.mod & pg.KMOD_CTRL
+                shift = ev.mod & pg.KMOD_SHIFT
+                # Copy the on-screen selection to the system clipboard.
+                # Ctrl+Shift+C / Ctrl+Insert avoid clobbering Ctrl+C (interrupt).
+                if ctrl and (ev.key == pg.K_INSERT or (shift and ev.key == pg.K_c)):
+                    self._copy_selection()
+                    continue
+                # Paste from the system clipboard: Ctrl+V or Shift+Insert.
+                if (ev.key == pg.K_v and ctrl) or (ev.key == pg.K_INSERT and shift):
                     text = self._paste()
                     if text:
                         events.append(("clipboard", self.kb_addr, text, None))
                         continue
+                # Any other keystroke clears the selection highlight.
+                self._clear_selection()
                 char = ord(ev.unicode) if ev.unicode else 0
                 events.append(("key_down", self.kb_addr, char, code, None))
             elif ev.type == pg.KEYUP:
                 code = self.keymap.get(ev.key, 0)
                 events.append(("key_up", self.kb_addr, 0, code, None))
             elif ev.type == pg.MOUSEBUTTONDOWN and ev.button in (1, 2, 3):
+                # Shift+left-drag selects screen text for copying instead of
+                # sending a touch/drag to OpenOS.
+                if ev.button == 1 and (pg.key.get_mods() & pg.KMOD_SHIFT):
+                    self._selecting = True
+                    self._sel_start = self._sel_end = self._cell0(ev.pos, self.current_screen)
+                    continue
+                self._clear_selection()
                 self._mouse_down = True
                 x, y = self._cell_at(ev.pos, self.current_screen)
                 events.append(("touch", self.screen_addr, x, y, ev.button - 1, None))
             elif ev.type == pg.MOUSEBUTTONUP and ev.button in (1, 2, 3):
+                if self._selecting and ev.button == 1:
+                    self._sel_end = self._cell0(ev.pos, self.current_screen)
+                    self._selecting = False
+                    continue
                 self._mouse_down = False
                 x, y = self._cell_at(ev.pos, self.current_screen)
                 events.append(("drop", self.screen_addr, x, y, ev.button - 1, None))
+            elif ev.type == pg.MOUSEMOTION and self._selecting:
+                self._sel_end = self._cell0(ev.pos, self.current_screen)
             elif ev.type == pg.MOUSEMOTION and self._mouse_down:
                 x, y = self._cell_at(ev.pos, self.current_screen)
                 events.append(("drag", self.screen_addr, x, y, 0, None))
@@ -198,6 +254,37 @@ class PygameDisplay(Display):
         except Exception:
             pass
         return ""
+
+    def _clear_selection(self):
+        self._sel_start = self._sel_end = None
+        self._selecting = False
+
+    def _selected_text(self):
+        """The text inside the current selection rectangle, '\n'-joined."""
+        bounds = self._selection_bounds()
+        screen = getattr(self, "current_screen", None)
+        if bounds is None or screen is None:
+            return ""
+        x0, y0, x1, y1 = bounds
+        buf = screen.buffer
+        lines = []
+        for y in range(y0, min(y1 + 1, buf.height)):
+            row = buf.chars[y]
+            chars = []
+            for x in range(x0, min(x1 + 1, buf.width)):
+                c = row[x]
+                chars.append(c if c else " ")
+            lines.append("".join(chars).rstrip())
+        return "\n".join(lines)
+
+    def _copy_selection(self):
+        text = self._selected_text()
+        if not text:
+            return
+        try:
+            self.pygame.scrap.put(self.pygame.SCRAP_TEXT, text.encode("utf-8"))
+        except Exception:
+            pass
 
     def beep(self, frequency, duration):
         pass
