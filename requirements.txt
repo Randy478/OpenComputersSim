@@ -1,3 +1,7 @@
 # OpenComputersSim dependencies
-lupa>=2.0      # embeds Lua 5.3 to run the real OpenOS
-pygame>=2.1    # the Tier 3 display window
+lupa>=2.0          # embeds Lua 5.3 to run the real OpenOS (required)
+pygame-ce>=2.4     # the Tier 3 display window. pygame-ce is a drop-in
+                   # replacement for pygame (imported as `pygame`) that ships
+                   # prebuilt wheels for the newest Python versions, including
+                   # 3.13/3.14, so no C compiler is needed. Only needed for the
+                   # GUI window; --headless runs with just lupa.

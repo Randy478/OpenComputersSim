@@ -61,10 +61,29 @@ mod. OpenComputersSim recreates that environment in Python:
 
 ## Requirements
 
-* Python 3.9+
-* `pip install -r requirements.txt` (installs `lupa` and `pygame`)
+* Python 3.9+ (3.9–3.14 supported)
+* `pip install -r requirements.txt` (installs `lupa` and `pygame-ce`)
 
-`lupa` ships a bundled Lua 5.3, so no system Lua is required.
+`lupa` ships a bundled Lua 5.3, so no system Lua is required. The display uses
+`pygame-ce` (the community edition of pygame), which ships prebuilt wheels for
+the newest Python releases — including 3.13 and 3.14 — so you never need a C
+compiler. It is imported as `pygame` and is a drop-in replacement.
+
+## Quick start on Windows
+
+Double-click **`install.bat`** (or run it from a Command Prompt). It finds your
+Python, creates a local `.venv`, and installs the dependencies — no manual
+steps. Then double-click or run **`run.bat`** to launch the Tier 3 window:
+
+```bat
+install.bat
+run.bat
+run.bat --spec
+run.bat --headless "lshw; df"
+```
+
+`run.bat` forwards every flag to the simulator, so anything in the Usage section
+below works the same way (`run.bat --scale 2`, `run.bat --print-config`, …).
 
 ## Usage
 
